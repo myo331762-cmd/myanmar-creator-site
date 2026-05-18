@@ -183,7 +183,8 @@ def extract_video():
         'format': 'all', 
         'quiet': True, 
         'no_warnings': True,
-        'proxy': 'http://wcbvunye-rotate:qf9clun68mbe@142.111.48.253:7030',
+        'proxy': 'http://wcbbbbbg:twof12al6dwx@142.111.48.253:7030',
+        
         'extractor_args': {
             'youtube': {
                 'player_client': ['android', 'web'],
