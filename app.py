@@ -1,12 +1,26 @@
 import os, sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-import asyncio, io, requests, edge_tts, re
+import asyncio, io, requests, edge_tts, re, random
 from flask import Flask, render_template_string, Response, request, jsonify, send_file, stream_with_context
 from flask_cors import CORS
 from yt_dlp import YoutubeDL
 
 app = Flask(__name__)
 CORS(app)
+
+# သင့် Webshare ထဲက Proxy ၁၀ ခုလုံးရဲ့ စာရင်း (အလိုအလျောက် လှည့်သုံးပေးမည်)
+PROXY_LIST = [
+    "http://wcbbbbbg:twof12al6dwx@142.111.48.253:7030",
+    "http://wcbbbbbg:twof12al6dwx@23.95.150.145:6114",
+    "http://wcbbbbbg:twof12al6dwx@45.38.107.97:6014",
+    "http://wcbbbbbg:twof12al6dwx@38.154.203.95:5863",
+    "http://wcbbbbbg:twof12al6dwx@198.105.121.200:6462",
+    "http://wcbbbbbg:twof12al6dwx@198.23.243.226:6361",
+    "http://wcbbbbbg:twof12al6dwx@84.247.60.125:6095",
+    "http://wcbbbbbg:twof12al6dwx@23.27.208.120:5830",
+    "http://wcbbbbbg:twof12al6dwx@23.229.19.94:8689",
+    "http://wcbbbbbg:twof12al6dwx@2.57.20.2:6983"
+]
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -178,13 +192,12 @@ def extract_video():
     url = request.json.get('url', '').strip()
     if not url or not url.startswith('http'): return jsonify({'success': False, 'error': 'လင့်ခ်ပုံစံ မှားယွင်းနေပါသည်။'})
     
-    # ပြင်ဆင်ချက် - Proxy နှင့် Bot ကျော်စနစ်များကို Default အနေနှင့် ချိတ်ဆက်ထားသည်
     ydl_opts = {
         'format': 'all', 
         'quiet': True, 
         'no_warnings': True,
-        'proxy': 'http://wcbbbbbg:twof12al6dwx@142.111.48.253:7030',
-        
+        # ပြင်ဆင်ချက် - Proxy စာရင်းထဲမှ ၁ ခုကို Request တိုင်းတွင် ကျပန်း ရွေးချယ်အသုံးပြုမည်
+        'proxy': random.choice(PROXY_LIST),
         'extractor_args': {
             'youtube': {
                 'player_client': ['android', 'web'],
@@ -220,14 +233,14 @@ def extract_video():
 def get_original_subtitle():
     url = request.json.get('url', '').strip()
     
-    # ပြင်ဆင်ချက် - စာတန်းထိုးထုတ်ယူသည့် နေရာတွင်လည်း Proxy နှင့် ကာကွယ်ရေးကျော်စနစ်များ ထည့်သွင်းထားသည်
     ydl_opts = {
         'writesubtitles': True, 
         'allsubtitles': True, 
         'skip_download': True, 
         'quiet': True, 
         'no_warnings': True,
-        'proxy': 'http://wcbvunye-rotate:qf9clun68mbe@142.111.48.253:7030',
+        # ပြင်ဆင်ချက် - Proxy စာရင်းထဲမှ ၁ ခုကို Request တိုင်းတွင် ကျပန်း ရွေးချယ်အသုံးပြုမည်
+        'proxy': random.choice(PROXY_LIST),
         'extractor_args': {
             'youtube': {
                 'player_client': ['android', 'web'],
@@ -266,4 +279,3 @@ def get_original_subtitle():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
-
