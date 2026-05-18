@@ -178,11 +178,23 @@ def extract_video():
     url = request.json.get('url', '').strip()
     if not url or not url.startswith('http'): return jsonify({'success': False, 'error': 'လင့်ခ်ပုံစံ မှားယွင်းနေပါသည်။'})
     
-    ydl_opts = {'format': 'all', 'quiet': True, 'no_warnings': True}
-    
-    # လင့်ခ်က YouTube ဖြစ်မှသာ android client အဖြစ် ပြောင်းသုံးစေမည် (Facebook, TikTok တို့ကို မထိခိုက်စေရန်)
-    if 'youtube.com' in url.lower() or 'youtu.be' in url.lower():
-        ydl_opts['extractor_args'] = {'youtube': {'player_client': ['android']}}
+    # ပြင်ဆင်ချက် - Proxy နှင့် Bot ကျော်စနစ်များကို Default အနေနှင့် ချိတ်ဆက်ထားသည်
+    ydl_opts = {
+        'format': 'all', 
+        'quiet': True, 
+        'no_warnings': True,
+        'proxy': 'http://wcbvunye-rotate:qf9clun68mbe@142.111.48.253:7030',
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web'],
+                'skip': ['hls', 'dash']
+            }
+        },
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+        }
+    }
 
     try:
         with YoutubeDL(ydl_opts) as ydl:
@@ -206,10 +218,26 @@ def extract_video():
 @app.route('/get-sub', methods=['POST'])
 def get_original_subtitle():
     url = request.json.get('url', '').strip()
-    ydl_opts = {'writesubtitles': True, 'allsubtitles': True, 'skip_download': True, 'quiet': True, 'no_warnings': True}
     
-    if 'youtube.com' in url.lower() or 'youtu.be' in url.lower():
-        ydl_opts['extractor_args'] = {'youtube': {'player_client': ['android']}}
+    # ပြင်ဆင်ချက် - စာတန်းထိုးထုတ်ယူသည့် နေရာတွင်လည်း Proxy နှင့် ကာကွယ်ရေးကျော်စနစ်များ ထည့်သွင်းထားသည်
+    ydl_opts = {
+        'writesubtitles': True, 
+        'allsubtitles': True, 
+        'skip_download': True, 
+        'quiet': True, 
+        'no_warnings': True,
+        'proxy': 'http://wcbvunye-rotate:qf9clun68mbe@142.111.48.253:7030',
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web'],
+                'skip': ['hls', 'dash']
+            }
+        },
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+        }
+    }
 
     try:
         with YoutubeDL(ydl_opts) as ydl:
@@ -237,3 +265,4 @@ def get_original_subtitle():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
+
