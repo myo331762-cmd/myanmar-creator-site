@@ -3,3 +3,4 @@ flask-cors
 yt-dlp
 edge-tts
 gunicorn
+requests
