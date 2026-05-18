@@ -1,7 +1,6 @@
 import os, sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import asyncio, io, requests, edge_tts, re
-# ဒီစာကြောင်းမှာ render_template_string ရော Response ရော အကုန် စနစ်တကျ Import လုပ်ထားပါတယ်
 from flask import Flask, render_template, render_template_string, Response, request, jsonify, send_file, stream_with_context
 from flask_cors import CORS
 from yt_dlp import YoutubeDL
@@ -28,7 +27,7 @@ HTML_TEMPLATE = """
                 <p class="text-xs text-amber-400 font-black uppercase tracking-wide">📍 PART 1: AI MYANMAR VOICE STUDIO</p>
                 <button onclick="clearTxt('ttsTxt')" class="text-xs bg-red-600/20 border border-red-500/30 text-red-400 px-3 py-1 rounded-xl font-bold">❌ Clear Text</button>
             </div>
-            <textarea id="ttsTxt" rows="4" placeholder="မြန်မာဇာတ်ညွှန်းများကို ดีမှာ ရေးထည့်ပါ..." class="w-full p-3 rounded-2xl bg-[#1e2533] text-xs text-slate-200 focus:outline-none border border-slate-700/40 focus:border-amber-500/50"></textarea>
+            <textarea id="ttsTxt" rows="4" placeholder="မြန်မာဇာတ်ညွှန်းများကို ဒီမှာ ရေးထည့်ပါ..." class="w-full p-3 rounded-2xl bg-[#1e2533] text-xs text-slate-200 focus:outline-none border border-slate-700/40 focus:border-amber-500/50"></textarea>
             <div class="grid grid-cols-2 gap-2.5">
                 <select id="vc" class="p-2.5 rounded-2xl bg-[#1e2533] text-xs text-slate-200 border border-slate-700/40">
                     <option value="my-MM-NilarNeural">👩 Female (နီလာ)</option>
@@ -225,4 +224,3 @@ def get_original_subtitle():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
-
