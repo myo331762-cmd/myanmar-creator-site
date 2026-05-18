@@ -8,9 +8,6 @@ from yt_dlp import YoutubeDL
 app = Flask(__name__)
 CORS(app)
 
-# Cookies ဖိုင်လမ်းကြောင်း သတ်မှတ်ခြင်း (ယခု folder ထဲက youtube-cookies.txt ကို ဖတ်မည်)
-COOKIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'youtube-cookies.txt')
-
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -125,7 +122,6 @@ HTML_TEMPLATE = """
 
 def convert_srt_to_clean_text(srt_text):
     if not srt_text: return ""
-    # VTT ကော SRT ရဲ့ အချိန်မှတ်တွေကိုပါ ပိုမိုတိကျစွာ ဖျက်နိုင်ရန် ပြင်ဆင်ထားသည်
     text = re.sub(r'\d\d:\d\d:\d\d[,\.]\d\d\d --> \d\d:\d\d:\d\d[,\.]\d\d\d', '', srt_text)
     lines = text.split('\n')
     cleaned = []
@@ -134,7 +130,7 @@ def convert_srt_to_clean_text(srt_text):
         if line_strip.isdigit(): continue
         if line_strip:
             line_strip = re.sub(r'^\d+\s*$', '', line_strip)
-            if line_strip and line_strip.lower() != "webvtt":  # WEBVTT စာသားပါက ဖယ်ထုတ်ရန်
+            if line_strip and line_strip.lower() != "webvtt":
                 cleaned.append(line_strip)
     return "\n".join(cleaned)
 
@@ -182,10 +178,11 @@ def extract_video():
     url = request.json.get('url', '').strip()
     if not url or not url.startswith('http'): return jsonify({'success': False, 'error': 'လင့်ခ်ပုံစံ မှားယွင်းနေပါသည်။'})
     
-    # yt-dlp option ထဲတွင် cookies ဖိုင်ရှိပါက ထည့်သုံးရန် ပြင်ဆင်ခြင်း
     ydl_opts = {'format': 'all', 'quiet': True, 'no_warnings': True}
-    if os.path.exists(COOKIES_FILE):
-        ydl_opts['cookiefile'] = COOKIES_FILE
+    
+    # လင့်ခ်က YouTube ဖြစ်မှသာ android client အဖြစ် ပြောင်းသုံးစေမည် (Facebook, TikTok တို့ကို မထိခိုက်စေရန်)
+    if 'youtube.com' in url.lower() or 'youtu.be' in url.lower():
+        ydl_opts['extractor_args'] = {'youtube': {'player_client': ['android']}}
 
     try:
         with YoutubeDL(ydl_opts) as ydl:
@@ -210,8 +207,9 @@ def extract_video():
 def get_original_subtitle():
     url = request.json.get('url', '').strip()
     ydl_opts = {'writesubtitles': True, 'allsubtitles': True, 'skip_download': True, 'quiet': True, 'no_warnings': True}
-    if os.path.exists(COOKIES_FILE):
-        ydl_opts['cookiefile'] = COOKIES_FILE
+    
+    if 'youtube.com' in url.lower() or 'youtu.be' in url.lower():
+        ydl_opts['extractor_args'] = {'youtube': {'player_client': ['android']}}
 
     try:
         with YoutubeDL(ydl_opts) as ydl:
@@ -230,7 +228,7 @@ def get_original_subtitle():
                 if sub_res.status_code == 200:
                     pure_srt = sub_res.text
                     if "WEBVTT" in pure_srt: 
-                        pure_srt = re.sub(r'^WEBVTT.*?\n\n', '', pure_srt, flags=re.DOTALL) # regex ကို ပြင်ဆင်ထားပါသည်
+                        pure_srt = re.sub(r'^WEBVTT.*?\n\n', '', pure_srt, flags=re.DOTALL)
                     pure_text = convert_srt_to_clean_text(pure_srt)
                     return jsonify({'success': True, 'srt_data': pure_srt.strip(), 'txt_data': pure_text.strip()})
             return jsonify({'success': False, 'error': 'No Subtitles found.'})
