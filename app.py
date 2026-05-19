@@ -312,8 +312,20 @@ def bg_video_download(task_id, url):
             BACKGROUND_TASKS[task_id] = {'status': 'Failed', 'error': str(e)}
 
 def bg_subtitle_extract(task_id, url):
-    ydl_opts = {'quiet': True, 'skip_download': True, 'writesubtitles': True, 'writeautomaticsub': True}
-    try:
+    ydl_opts = 
+    try:    ydl_opts = {
+        'quiet': True, 
+        'skip_download': True, 
+        'writesubtitles': True, 
+        'writeautomaticsub': True,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android'],
+                'skip': ['webpage']
+            }
+        }
+    }
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             subs = info.get('subtitles', {}); auto_subs = info.get('automatic_captions', {})
