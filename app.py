@@ -1,281 +1,342 @@
-import os, sys
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-import asyncio, io, requests, edge_tts, re, random
-from flask import Flask, render_template_string, Response, request, jsonify, send_file, stream_with_context
+import os
+import sys
+import asyncio
+import io
+import requests
+import yt_dlp
+import edge_tts
+import re
+import random
+import logging
+import threading
+import uuid
+from flask import Flask, render_template_string, request, jsonify, send_file
 from flask_cors import CORS
-from yt_dlp import YoutubeDL
+from deep_translator import GoogleTranslator
+
+# Logging Setup
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/*": {"origins": "*"}})
 
-# သင့် Webshare ထဲက Proxy ၁၀ ခုလုံးရဲ့ စာရင်း (အလိုအလျောက် လှည့်သုံးပေးမည်)
-PROXY_LIST = [
-    "http://wcbbbbbg:twof12al6dwx@142.111.48.253:7030",
-    "http://wcbbbbbg:twof12al6dwx@23.95.150.145:6114",
-    "http://wcbbbbbg:twof12al6dwx@45.38.107.97:6014",
-    "http://wcbbbbbg:twof12al6dwx@38.154.203.95:5863",
-    "http://wcbbbbbg:twof12al6dwx@198.105.121.200:6462",
-    "http://wcbbbbbg:twof12al6dwx@198.23.243.226:6361",
-    "http://wcbbbbbg:twof12al6dwx@84.247.60.125:6095",
-    "http://wcbbbbbg:twof12al6dwx@23.27.208.120:5830",
-    "http://wcbbbbbg:twof12al6dwx@23.229.19.94:8689",
-    "http://wcbbbbbg:twof12al6dwx@2.57.20.2:6983"
-]
+# Global dictionary ဖြင့် Background Task စနစ်ကို အစားထိုးခြင်း (Redis မလိုတော့ပါ)
+BACKGROUND_TASKS = {}
 
+# Webshare Proxy List (ဖုန်းအတွက် မလိုလျှင် ချန်ထားခဲ့နိုင်သည်)
+PROXY_LIST = []
+
+# ==========================================
+# 1. HTML UI Template (Built-in Web Interface)
+# ==========================================
 HTML_TEMPLATE = """
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Myanmar Creator Site</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <title>Phone Media Suite</title>
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f8f9fa; font-family: 'Segoe UI', sans-serif; }
+        .nav-tabs .nav-link.active { background-color: #0d6efd; color: white; border-color: #0d6efd; }
+        .card { border: none; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+    </style>
 </head>
-<body class="bg-slate-950 text-slate-100 flex items-center justify-center min-h-screen p-4">
-    <div class="bg-[#1a1f2c] border border-slate-800 p-5 rounded-2xl shadow-2xl w-full max-w-md space-y-5">
-        <div class="text-center">
-            <h1 class="text-2xl font-black text-cyan-400 tracking-wider uppercase">MYANMAR CREATOR SITE</h1>
-        </div>
-        <div class="space-y-3.5 bg-[#11151e] p-4 rounded-2xl border border-slate-800/60">
-            <div class="flex justify-between items-center">
-                <p class="text-xs text-amber-400 font-black uppercase tracking-wide">📍 PART 1: AI MYANMAR VOICE STUDIO</p>
-                <button onclick="clearTxt('ttsTxt')" class="text-xs bg-red-600/20 border border-red-500/30 text-red-400 px-3 py-1 rounded-xl font-bold">❌ Clear Text</button>
-            </div>
-            <textarea id="ttsTxt" rows="4" placeholder="မြန်မာဇာတ်ညွှန်းများကို ဒီမှာ ရေးထည့်ပါ..." class="w-full p-3 rounded-2xl bg-[#1e2533] text-xs text-slate-200 focus:outline-none border border-slate-700/40 focus:border-amber-500/50"></textarea>
-            <div class="grid grid-cols-2 gap-2.5">
-                <select id="vc" class="p-2.5 rounded-2xl bg-[#1e2533] text-xs text-slate-200 border border-slate-700/40">
-                    <option value="my-MM-NilarNeural">👩 Female (နီလာ)</option>
-                    <option value="my-MM-ThihaNeural">👨 Male (သီဟ)</option>
-                </select>
-                <select id="sp" class="p-2.5 rounded-2xl bg-[#1e2533] text-xs text-slate-200 border border-slate-700/40">
-                    <option value="1.0">😐 Normal (0%)</option>
-                    <option value="1.1">⚡ Fast (+10%)</option>
-                    <option value="1.2">⚡ Fast (+20%)</option>
-                    <option value="1.3" selected>⚡ Fast (+30%)</option>
-                    <option value="1.4">🚀 Fast (+40%)</option>
-                </select>
-            </div>
-            <button onclick="gVoice()" class="w-full bg-amber-500 p-2.5 rounded-2xl font-black text-xs text-slate-950 shadow-lg shadow-amber-500/20 uppercase tracking-wide">🗣️ Convert Script to AI Voice</button>
-            <div id="vRes" class="hidden space-y-2">
-                <audio id="aud" controls class="w-full h-9"></audio>
-                <a id="dlA" download="voice.mp3" class="block bg-cyan-600 p-2 text-center text-xs font-black rounded-2xl uppercase">📥 Download MP3</a>
-            </div>
-        </div>
-        <div id="ld" class="hidden text-center text-xs text-cyan-400 font-bold bg-[#11151e] p-3 rounded-2xl border border-cyan-500/20 animate-pulse">
-            ⏳ Extracting Data from Server... Please wait...
-        </div>
-        <div class="space-y-3.5 bg-[#11151e] p-4 rounded-2xl border border-slate-800/60">
-            <p class="text-xs text-cyan-400 font-black uppercase tracking-wide">📹 PART 2: VIDEO LINK EXTRACTOR</p>
-            <input type="text" id="url" placeholder="Paste Video Link here..." class="w-full p-3 rounded-2xl bg-[#1e2533] text-xs text-slate-200 focus:outline-none border border-slate-700/40 focus:border-cyan-500/50">
-            <div class="grid grid-cols-2 gap-2.5">
-                <button onclick="extVideo()" class="w-full bg-cyan-600 p-2.5 rounded-2xl font-black text-xs text-white uppercase tracking-wide">💥 Extract Video Info</button>
-                <button onclick="getOriginalSRTAndText()" class="w-full bg-emerald-600 p-2.5 rounded-2xl font-black text-xs text-white uppercase tracking-wide">🇬🇧 Get SRT & Text</button>
-            </div>
-            <div id="res" class="hidden space-y-3 pt-1">
-                <p id="t" class="text-xs font-bold text-slate-300 truncate p-1 bg-[#1e2533]/50 rounded-xl px-2 border border-slate-800"></p>
-                <div id="vPreviewBox" class="hidden rounded-2xl border border-slate-700 bg-black overflow-hidden"><video id="vPreview" controls playsinline class="w-full max-h-36 object-contain"></video></div>
-                <div id="fmts" class="space-y-1.5 max-h-24 overflow-y-auto"></div>
-                <div id="engTextsSection" class="hidden space-y-3 pt-2 border-t border-slate-800/80">
-                    <div class="space-y-1">
-                        <label class="text-[11px] text-cyan-400 font-black uppercase tracking-wide">🇬🇧 Original English SRT</label>
-                        <textarea id="engSrtOut" rows="4" readonly class="w-full p-2.5 rounded-xl bg-[#1e2533] text-xs text-slate-300 focus:outline-none border border-slate-700/30 select-all"></textarea>
+<body>
+    <div class="container py-4" style="max-width: 600px;">
+        <h3 class="text-center mb-4 fw-bold text-primary">📱 Mobile All-In-One Downloader</h3>
+        
+        <ul class="nav nav-tabs mb-4 justify-content-center" id="myTab" role="tablist">
+            <li class="nav-item"><button class="nav-link active fw-bold" id="video-tab" data-bs-toggle="tab" data-bs-target="#video-panel">Video</button></li>
+            <li class="nav-item"><button class="nav-link fw-bold" id="sub-tab" data-bs-toggle="tab" data-bs-target="#sub-panel">Subtitle</button></li>
+            <li class="nav-item"><button class="nav-link fw-bold" id="tts-tab" data-bs-toggle="tab" data-bs-target="#tts-panel">Text-To-Speech</button></li>
+        </ul>
+
+        <div class="tab-content">
+            <!-- Video Panel -->
+            <div class="tab-pane fade show active" id="video-panel">
+                <div class="card p-3">
+                    <h5>Social Media Downloader</h5>
+                    <p class="text-muted small">TikTok, YouTube, FB, IG, Twitter/X</p>
+                    <div class="input-group mb-3">
+                        <input type="text" id="videoUrl" class="form-control" placeholder="Paste link here...">
+                        <button class="btn btn-primary" onclick="startTask('/ext', 'videoUrl', renderVideoResults)">Extract</button>
                     </div>
-                    <div class="space-y-1">
-                        <label class="text-[11px] text-emerald-400 font-black uppercase tracking-wide">🇬🇧 Original English Text</label>
-                        <textarea id="engTxtOut" rows="4" readonly class="w-full p-2.5 rounded-xl bg-[#1e2533] text-xs text-slate-200 focus:outline-none border border-slate-700/30 select-all"></textarea>
+                    <div id="videoResult" class="mt-2"></div>
+                </div>
+            </div>
+
+            <!-- Subtitle Panel -->
+            <div class="tab-pane fade" id="sub-panel">
+                <div class="card p-3">
+                    <h5>YouTube Subtitle Extractor</h5>
+                    <div class="input-group mb-3">
+                        <input type="text" id="subUrl" class="form-control" placeholder="Paste YouTube link here...">
+                        <button class="btn btn-primary" onclick="startTask('/get-sub', 'subUrl', renderSubResults)">Get Subs</button>
                     </div>
+                    <div id="subResult" class="mt-2"></div>
+                </div>
+            </div>
+
+            <!-- TTS Panel -->
+            <div class="tab-pane fade" id="tts-panel">
+                <div class="card p-3">
+                    <h5>Myanmar Edge TTS</h5>
+                    <div class="mb-3">
+                        <textarea id="ttsText" class="form-control" rows="3" placeholder="မြန်မာစာသားများ ရိုက်ထည့်ပါ..."></textarea>
+                    </div>
+                    <button class="btn btn-primary w-100" onclick="generateTTS()">အသံပြောင်းမည်</button>
+                    <audio id="audioPlayer" class="w-100 mt-3 d-none" controls></audio>
                 </div>
             </div>
         </div>
     </div>
+
     <script>
-        const $ = id => document.getElementById(id);
-        const toggle = (id, s) => { const el = $(id); if(s) { el.classList.remove('hidden'); } else { el.classList.add('hidden'); } };
-        window.onload = () => { if(localStorage.getItem('fS')) $('ttsTxt').value = localStorage.getItem('fS'); };
-        $('ttsTxt').oninput = (e) => localStorage.setItem('fS', e.target.value);
-        function clearTxt(id) { $(id).value = ""; if(id==='ttsTxt') localStorage.setItem('fS', ""); }
-        async function gVoice() {
-            const text=$('ttsTxt').value, voice=$('vc').value, speed=$('sp').value; if(!text.trim()) return alert('စာထည့်ပါ');
-            toggle('ld', 1); toggle('vRes', 0);
+        async function startTask(endpoint, inputId, successCallback) {
+            const url = document.getElementById(inputId).value.trim();
+            if(!url) return Swal.fire('Error', 'လင့်ခ် အရင်ထည့်ပါ!', 'error');
+            
+            Swal.fire({ title: 'Processing...', text: 'ခေတ္တစောင့်ဆိုင်းပေးပါ...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+
             try {
-                const r = await fetch('/tts', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({text, voice, speed})});
-                if(r.ok) { const b=await r.blob(), u=URL.createObjectURL(b); $('aud').src=u; $('dlA').href=u; toggle('vRes', 1); } else alert(await r.text());
-            } catch(e){alert('Error');} finally { toggle('ld', 0); }
+                const res = await fetch(endpoint, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({url}) });
+                const data = await res.json();
+                if(data.success && data.task_id) {
+                    checkStatus(data.task_id, successCallback);
+                } else {
+                    Swal.fire('Error', data.error || 'အဆင်မပြေပါ', 'error');
+                }
+            } catch(e) { Swal.fire('Error', 'Server Error', 'error'); }
         }
-        async function extVideo() {
-            const url = $('url').value.trim(); if(!url) return alert('လင့်ခ်အရင်ထည့်ပေးပါဗျာ!');
-            toggle('ld', 1); toggle('res', 0); toggle('vPreviewBox', 0); $('engTextsSection').classList.add('hidden');
-            try {
-                const r = await fetch('/ext', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url})});
-                const d = await r.json();
-                if(d.success) {
-                    $('t').innerText = d.title; $('fmts').innerHTML = "";
-                    if(d.fmts.length > 0) { $('vPreview').src = d.fmts[0].url; toggle('vPreviewBox', 1); }
-                    d.fmts.forEach(f => { $('fmts').innerHTML += `<a href="/dl?url=${encodeURIComponent(f.url)}&ext=${f.ext}" class="block bg-[#1e2533] p-2 rounded-2xl text-xs text-slate-300 flex justify-between border border-slate-800"><span>Video ${f.res} (${f.size})</span><span class="text-cyan-400 font-bold">Download</span></a>`; });
-                    toggle('res', 1);
-                } else alert(d.error);
-            } catch(e){alert('Error');} finally { toggle('ld', 0); }
+
+        function checkStatus(taskId, successCallback) {
+            const interval = setInterval(async () => {
+                const res = await fetch(`/status/${taskId}`);
+                const data = await res.json();
+                if(data.status === 'Completed') {
+                    clearInterval(interval); Swal.close(); successCallback(data.result);
+                } else if(data.status === 'Failed') {
+                    clearInterval(interval); Swal.fire('Failed', data.error || 'မအောင်မြင်ပါ', 'error');
+                }
+            }, 2000);
         }
-        async function getOriginalSRTAndText() {
-            const url = $('url').value.trim(); if(!url) return alert('ဗီဒီယိုလင့်ခ် အရင်ထည့်ပေးပါဦးဗျာ!');
-            toggle('ld', 1); $('engTextsSection').classList.add('hidden');
-            try {
-                const r = await fetch('/get-sub', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url})});
-                const d = await r.json();
-                if(d.success) {
-                    $('engSrtOut').value = d.srt_data; $('engTxtOut').value = d.txt_data;
-                    toggle('res', 1); $('engTextsSection').classList.remove('hidden');
-                    alert('🎉 Extraction Complete!');
-                } else alert(d.error);
-            } catch(e){alert('Error');} finally { toggle('ld', 0); }
+
+        function renderVideoResults(res) {
+            if(!res.success) return Swal.fire('Error', res.error, 'error');
+            let html = `<h6>${res.title}</h6><table class="table table-sm mt-2"><tbody>`;
+            res.fmts.forEach(f => {
+                html += `<tr><td>${f.res}</td><td><a href="${f.url}" target="_blank" class="btn btn-success btn-sm">Download</a></td></tr>`;
+            });
+            html += '</tbody></table>';
+            document.getElementById('videoResult').innerHTML = html;
+        }
+
+        function renderSubResults(res) {
+            if(!res.success) return Swal.fire('Error', res.error, 'error');
+            let html = `<h6>စာတန်းထိုး ထွက်လာပါပြီ</h6><div class="d-flex gap-2 my-2">`;
+            if(res.my_srt) html += `<button class="btn btn-outline-primary btn-sm" onclick="downloadBlob('${btoa(unescape(encodeURIComponent(res.my_srt)))}', 'sub.srt')">Download SRT</button>`;
+            if(res.my_txt) html += `<button class="btn btn-outline-secondary btn-sm" onclick="downloadBlob('${btoa(unescape(encodeURIComponent(res.my_txt)))}', 'text.txt')">Download TXT</button>`;
+            html += `</div><textarea class="form-control text-start" rows="5" readonly>${res.my_txt || res.eng_txt}</textarea>`;
+            document.getElementById('subResult').innerHTML = html;
+        }
+
+        function downloadBlob(base64Str, filename) {
+            const binary = atob(base64Str);
+            const array = [];
+            for (let i = 0; i < binary.length; i++) array.push(binary.charCodeAt(i));
+            const blob = new Blob([new Uint8Array(array)], {type: 'text/plain'});
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = filename;
+            link.click();
+        }
+
+        async function generateTTS() {
+            const text = document.getElementById('ttsText').value.trim();
+            if(!text) return Swal.fire('Error', 'စာသားထည့်ပါ', 'error');
+            Swal.fire({ title: 'Converting...', didOpen: () => Swal.showLoading() });
+            
+            const res = await fetch('/tts', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text}) });
+            if(res.status === 200) {
+                Swal.close();
+                const blob = await res.blob();
+                const audio = document.getElementById('audioPlayer');
+                audio.src = URL.createObjectURL(blob);
+                audio.classList.remove('d-none');
+                audio.play();
+            } else { Swal.fire('Error', 'မအောင်မြင်ပါ', 'error'); }
         }
     </script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
 """
 
+# ==========================================
+# 2. Helpers
+# ==========================================
 def convert_srt_to_clean_text(srt_text):
     if not srt_text: return ""
-    text = re.sub(r'\d\d:\d\d:\d\d[,\.]\d\d\d --> \d\d:\d\d:\d\d[,\.]\d\d\d', '', srt_text)
+    text = re.sub(r'(\d{2}:)?\d{2}:\d{2}[,\.]\d{3} --> (\d{2}:)?\d{2}:\d{2}[,\.]\d{3}', '', srt_text)
+    text = re.sub(r'<[^>]+>', '', text)
     lines = text.split('\n')
-    cleaned = []
-    for line in lines:
-        line_strip = line.strip()
-        if line_strip.isdigit(): continue
-        if line_strip:
-            line_strip = re.sub(r'^\d+\s*$', '', line_strip)
-            if line_strip and line_strip.lower() != "webvtt":
-                cleaned.append(line_strip)
+    cleaned = [line.strip() for line in lines if line.strip() and not line.strip().isdigit() and line.strip().lower() != "webvtt"]
     return "\n".join(cleaned)
 
+def vtt_to_srt(vtt_content):
+    if not vtt_content: return ""
+    srt = re.sub(r'^WEBVTT([\s\S]*?)\n\n', '', vtt_content)
+    srt = re.sub(r'(\d{2}:)?(\d{2}:\d{2})\.(\d{3})', r'\1\2,\3', srt)
+    lines = srt.split('\n')
+    new_lines = []
+    counter = 1
+    expect_timeline = True
+    for line in lines:
+        if '-->' in line:
+            if expect_timeline:
+                new_lines.append(str(counter)); counter += 1
+            new_lines.append(line); expect_timeline = False
+        else:
+            if line.strip() == "": expect_timeline = True
+            new_lines.append(line)
+    return '\n'.join(new_lines)
+
+def get_tiktok_nowatermark(url):
+    try:
+        api_url = f"https://www.tikwm.com/api/?url={url}&hd=1"
+        response = requests.get(api_url, timeout=15).json()
+        if response.get('code') == 0:
+            data = response['data']
+            return {
+                'success': True, 'title': data.get('title', 'TikTok Video'),
+                'fmts': [
+                    {'res': 'HD Video (No Watermark)', 'url': data.get('hdplay') or data.get('play'), 'size': 'Auto', 'ext': 'mp4'},
+                    {'res': 'Audio ONLY (MP3)', 'url': data.get('music'), 'size': 'Auto', 'ext': 'mp3'}
+                ]
+            }
+        return {'success': False, 'error': 'Private ဗီဒီယို ဖြစ်နိုင်ပါသည်'}
+    except Exception as e: return {'success': False, 'error': str(e)}
+
+def translate_srt_to_myanmar(srt_text):
+    if not srt_text: return ""
+    try:
+        translator = GoogleTranslator(source='en', target='my')
+        lines = srt_text.split('\n')
+        for idx, line in enumerate(lines):
+            stripped = line.strip()
+            if stripped and '-->' not in stripped and not stripped.isdigit():
+                lines[idx] = translator.translate(stripped)
+        return '\n'.join(lines)
+    except: return srt_text
+
+async def _generate_audio_bytes(text):
+    audio_data = b""
+    comm = edge_tts.Communicate(text, 'my-MM-NilarNeural', rate="+0%")
+    async for chunk in comm.stream():
+        if chunk["type"] == "audio": audio_data += chunk["data"]
+    return audio_data
+
+# ==========================================
+# 3. Threaded Background Workers (No Celery/Redis)
+# ==========================================
+def bg_video_download(task_id, url):
+    if 'tiktok.com' in url or 'douyin.com' in url:
+        BACKGROUND_TASKS[task_id] = {'status': 'Completed', 'result': get_tiktok_nowatermark(url)}
+        return
+
+    ydl_opts = {
+        'quiet': True, 'no_warnings': True,
+        'format': 'best[ext=mp4]/best', # ဖုန်းထဲတွင် FFmpeg မရှိပါက အဆင်ပြေစေမည့် basic format ရွေးချယ်မှု
+    }
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            fmts_data = []
+            if 'formats' in info:
+                for f in info['formats']:
+                    if f.get('vcodec') != 'none' and f.get('acodec') != 'none' and f.get('url'):
+                        res = f.get('resolution') or (str(f.get('height')) + "p")
+                        fmts_data.append({'res': str(res), 'url': f.get('url'), 'ext': f.get('ext', 'mp4'), 'size': 'View'})
+            if not fmts_data and info.get('url'):
+                fmts_data.append({'res': 'Standard Quality', 'url': info.get('url'), 'ext': info.get('ext', 'mp4'), 'size': 'View'})
+            
+            BACKGROUND_TASKS[task_id] = {
+                'status': 'Completed',
+                'result': {'success': True, 'title': info.get('title', 'Video'), 'fmts': fmts_data[:5]}
+            }
+    except Exception as e:
+        BACKGROUND_TASKS[task_id] = {'status': 'Failed', 'error': str(e)}
+
+def bg_subtitle_extract(task_id, url):
+    ydl_opts = {'quiet': True, 'skip_download': True, 'writesubtitles': True, 'writeautomaticsub': True}
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            subs = info.get('subtitles', {}); auto_subs = info.get('automatic_captions', {})
+            base_sub_url = None; is_youtube = 'youtube.com' in url or 'youtu.be' in url
+            for lang in ['en', 'en-US', 'en-GB']:
+                if lang in subs: base_sub_url = subs[lang][0].get('url'); break
+                elif lang in auto_subs: base_sub_url = auto_subs[lang][0].get('url'); break
+            if not base_sub_url:
+                BACKGROUND_TASKS[task_id] = {'status': 'Failed', 'error': 'အင်္ဂလိပ်စာတန်းထိုး မတွေ့ပါ'}
+                return
+            
+            if is_youtube and "fmt=" not in base_sub_url: base_sub_url += "&fmt=vtt"
+            eng_res = requests.get(base_sub_url, timeout=15)
+            eng_srt = vtt_to_srt(eng_res.text) if eng_res.status_code == 200 else ""
+            eng_txt = convert_srt_to_clean_text(eng_srt)
+            
+            my_srt = translate_srt_to_myanmar(eng_srt)
+            my_txt = convert_srt_to_clean_text(my_srt)
+            
+            BACKGROUND_TASKS[task_id] = {
+                'status': 'Completed',
+                'result': {'success': True, 'eng_srt': eng_srt, 'eng_txt': eng_txt, 'my_srt': my_srt, 'my_txt': my_txt}
+            }
+    except Exception as e:
+        BACKGROUND_TASKS[task_id] = {'status': 'Failed', 'error': str(e)}
+
+# ==========================================
+# 4. Flask Routes
+# ==========================================
 @app.route('/')
 def home(): return render_template_string(HTML_TEMPLATE)
 
-@app.route('/tts', methods=['POST'])
-def tts():
-    data = request.json
-    text, voice, speed = data.get('text', '').strip(), data.get('voice', 'my-MM-NilarNeural'), data.get('speed', '1.0')
-    if not text: return "No text", 400
-    v = float(speed)
-    rate = f"+{int((v - 1.0) * 100)}%" if v >= 1.0 else f"-{int((1.0 - v) * 100)}%"
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        audio_data = loop.run_until_complete(run_tts(text, voice, rate))
-        loop.close()
-        return send_file(io.BytesIO(audio_data), mimetype="audio/mp3", as_attachment=True, download_name="ai.mp3")
-    except Exception as e: return str(e), 500
-
-async def run_tts(text, voice, rate):
-    chunks = [text[i:i+1000] for i in range(0, len(text), 1000)]
-    audio = b""
-    for chunk in chunks:
-        if not chunk.strip(): continue
-        comm = edge_tts.Communicate(chunk, voice, rate=rate)
-        async for data in comm.stream():
-            if data["type"] == "audio": audio += data["data"]
-    return audio
-
-@app.route('/dl')
-def download_proxy():
-    url, ext = request.args.get('url'), request.args.get('ext', 'mp4')
-    try:
-        req = requests.get(url, stream=True, headers={'User-Agent': 'Mozilla/5.0'}, timeout=180)
-        def generate():
-            for c in req.iter_content(chunk_size=65536):
-                if c: yield c
-        return Response(stream_with_context(generate()), headers={'Content-Disposition': 'attachment; filename="video.' + str(ext) + '"', 'Content-Type': req.headers.get('content-type', 'video/mp4')})
-    except Exception as e: return str(e), 500
-
 @app.route('/ext', methods=['POST'])
 def extract_video():
-    url = request.json.get('url', '').strip()
-    if not url or not url.startswith('http'): return jsonify({'success': False, 'error': 'လင့်ခ်ပုံစံ မှားယွင်းနေပါသည်။'})
-    
-    ydl_opts = {
-        'format': 'all', 
-        'quiet': True, 
-        'no_warnings': True,
-        # ပြင်ဆင်ချက် - Proxy စာရင်းထဲမှ ၁ ခုကို Request တိုင်းတွင် ကျပန်း ရွေးချယ်အသုံးပြုမည်
-        'proxy': random.choice(PROXY_LIST),
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'web'],
-                'skip': ['hls', 'dash']
-            }
-        },
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9',
-        }
-    }
-
-    try:
-        with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            title = info.get('title', 'Video')
-            formats = info.get('formats', [])
-            fmts_data, seen = [], set()
-            for f in formats:
-                if f.get('url') and f.get('vcodec') != 'none' and f.get('acodec') != 'none':
-                    res = f.get('resolution') or (str(f.get('height')) + "p")
-                    if res in seen: continue
-                    seen.add(res)
-                    sz = f.get('filesize') or f.get('filesize_approx') or 0
-                    sz_txt = f"{sz / (1024*1024):.1f} MB" if sz else "Unknown"
-                    fmts_data.append({'res': str(res), 'url': f.get('url'), 'h': f.get('height') or 0, 'ext': f.get('ext', 'mp4'), 'size': sz_txt})
-            if not fmts_data and info.get('url'): fmts_data.append({'res': "Best Quality", 'url': info.get('url'), 'h': 9999, 'ext': 'mp4', 'size': 'Unknown'})
-            fmts_data.sort(key=lambda x: x['h'], reverse=True)
-            return jsonify({'success': True, 'title': title, 'fmts': fmts_data})
-    except Exception as e: return jsonify({'success': False, 'error': str(e)})
+    url = (request.json or {}).get('url', '').strip()
+    if not url: return jsonify({'success': False, 'error': 'လင့်ခ်ထည့်ပါ'})
+    task_id = str(uuid.uuid4())
+    BACKGROUND_TASKS[task_id] = {'status': 'Processing'}
+    threading.Thread(target=bg_video_download, args=(task_id, url)).start()
+    return jsonify({'success': True, 'task_id': task_id})
 
 @app.route('/get-sub', methods=['POST'])
-def get_original_subtitle():
-    url = request.json.get('url', '').strip()
-    
-    ydl_opts = {
-        'writesubtitles': True, 
-        'allsubtitles': True, 
-        'skip_download': True, 
-        'quiet': True, 
-        'no_warnings': True,
-        # ပြင်ဆင်ချက် - Proxy စာရင်းထဲမှ ၁ ခုကို Request တိုင်းတွင် ကျပန်း ရွေးချယ်အသုံးပြုမည်
-        'proxy': random.choice(PROXY_LIST),
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'web'],
-                'skip': ['hls', 'dash']
-            }
-        },
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9',
-        }
-    }
+def get_subtitles():
+    url = (request.json or {}).get('url', '').strip()
+    if not url: return jsonify({'success': False, 'error': 'လင့်ခ်ထည့်ပါ'})
+    task_id = str(uuid.uuid4())
+    BACKGROUND_TASKS[task_id] = {'status': 'Processing'}
+    threading.Thread(target=bg_subtitle_extract, args=(task_id, url)).start()
+    return jsonify({'success': True, 'task_id': task_id})
 
+@app.route('/status/<task_id>', methods=['GET'])
+def get_task_status(task_id):
+    task = BACKGROUND_TASKS.get(task_id, {'status': 'Failed', 'error': 'Task Not Found'})
+    return jsonify(task)
+
+@app.route('/tts', methods=['POST'])
+def tts():
+    text = (request.json or {}).get('text', '').strip()
+    if not text: return "No text", 400
     try:
-        with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            subtitles = info.get('subtitles', {})
-            automatic_captions = info.get('automatic_captions', {})
-            srt_url = None
-            if 'en' in subtitles:
-                for sub in subtitles['en']:
-                    if sub.get('ext') in ['srt', 'vtt']: srt_url = sub.get('url'); break
-            if not srt_url and 'en' in automatic_captions:
-                for sub in automatic_captions['en']:
-                    if sub.get('ext') in ['srt', 'vtt']: srt_url = sub.get('url'); break
-            if srt_url:
-                sub_res = requests.get(srt_url, timeout=30)
-                if sub_res.status_code == 200:
-                    pure_srt = sub_res.text
-                    if "WEBVTT" in pure_srt: 
-                        pure_srt = re.sub(r'^WEBVTT.*?\n\n', '', pure_srt, flags=re.DOTALL)
-                    pure_text = convert_srt_to_clean_text(pure_srt)
-                    return jsonify({'success': True, 'srt_data': pure_srt.strip(), 'txt_data': pure_text.strip()})
-            return jsonify({'success': False, 'error': 'No Subtitles found.'})
-    except Exception as e: return jsonify({'success': False, 'error': str(e)})
+        audio = asyncio.run(_generate_audio_bytes(text))
+        return send_file(io.BytesIO(audio), mimetype="audio/mp3")
+    except Exception as e: return str(e), 500
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=5000, debug=False)
