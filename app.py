@@ -23,7 +23,6 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 
 # Global dictionary ဖြင့် Task များကို မှတ်ခြင်း
 BACKGROUND_TASKS = {}
-# 💡 Fix 1: Thread-Safety အတွက် Lock စနစ်ကို အသုံးပြုခြင်း
 tasks_lock = threading.Lock()
 
 # ==========================================
@@ -176,17 +175,12 @@ HTML_TEMPLATE = """
 # 2. Helpers (Thread-Safe & Robust Cleanup)
 # ==========================================
 def cleanup_tasks():
-    """💡 Fix 1 & 3: Thread-safe ဖြစ်ပြီး အတင်းအကျပ် ဖျက်ထုတ်ပေးမည့် Cleanup စနစ်"""
     with tasks_lock:
-        # စိတ်ချရအောင် list() ပြောင်းပြီးမှ loop ပတ်ခြင်း (Crash မဖြစ်စေရန်)
         current_tasks = list(BACKGROUND_TASKS.items())
-        
-        # ၁။ ပြီးဆုံးသွားသော Task အဟောင်းများကို အရင်ဖျက်ထုတ်ခြင်း
         keys_to_del = [k for k, v in current_tasks if v.get('status') in ['Completed', 'Failed']]
         for k in keys_to_del[:10]:
             BACKGROUND_TASKS.pop(k, None)
             
-        # ၂။ အကယ်၍ အားလုံး Processing ဖြစ်ပြီး အရေအတွက် ၂၅ ခုထက် ကျော်လာပါက အဟောင်းဆုံးကို အတင်းဖျက်ပစ်ခြင်း
         if len(BACKGROUND_TASKS) > 25:
             oldest_keys = list(BACKGROUND_TASKS.keys())[:10]
             for k in oldest_keys:
@@ -270,7 +264,7 @@ async def _generate_audio_bytes(text):
     return audio_data
 
 # ==========================================
-# 3. Threaded Background Workers
+# 3. Threaded Background Workers (Android Client Updated)
 # ==========================================
 def bg_video_download(task_id, url):
     if 'tiktok.com' in url or 'douyin.com' in url:
@@ -278,8 +272,7 @@ def bg_video_download(task_id, url):
             BACKGROUND_TASKS[task_id] = {'status': 'Completed', 'result': get_tiktok_nowatermark(url)}
         return
 
-    ydl_opts = 
-    try:    ydl_opts = {
+    ydl_opts = {
         'quiet': True, 
         'no_warnings': True, 
         'format': 'best[ext=mp4]/best',
@@ -290,7 +283,7 @@ def bg_video_download(task_id, url):
             }
         }
     }
-
+    try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             fmts_data = []
@@ -312,8 +305,7 @@ def bg_video_download(task_id, url):
             BACKGROUND_TASKS[task_id] = {'status': 'Failed', 'error': str(e)}
 
 def bg_subtitle_extract(task_id, url):
-    ydl_opts = 
-    try:    ydl_opts = {
+    ydl_opts = {
         'quiet': True, 
         'skip_download': True, 
         'writesubtitles': True, 
@@ -325,7 +317,7 @@ def bg_subtitle_extract(task_id, url):
             }
         }
     }
-
+    try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             subs = info.get('subtitles', {}); auto_subs = info.get('automatic_captions', {})
@@ -342,7 +334,6 @@ def bg_subtitle_extract(task_id, url):
             
             eng_res = requests.get(base_sub_url, timeout=15)
             
-            # 💡 Fix 2: Subtitle စာသား တကယ် ရမရ စစ်ဆေးခြင်း
             if eng_res.status_code != 200 or not eng_res.text.strip():
                 with tasks_lock: BACKGROUND_TASKS[task_id] = {'status': 'Failed', 'error': 'စာတန်းထိုးဆွဲ၍မရပါ (Network Error သို့မဟုတ် လင့်ခ်သေနေခြင်း)'}
                 return
@@ -405,3 +396,4 @@ def tts():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
