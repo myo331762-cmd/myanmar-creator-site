@@ -278,8 +278,19 @@ def bg_video_download(task_id, url):
             BACKGROUND_TASKS[task_id] = {'status': 'Completed', 'result': get_tiktok_nowatermark(url)}
         return
 
-    ydl_opts = {'quiet': True, 'no_warnings': True, 'format': 'best[ext=mp4]/best'}
-    try:
+    ydl_opts = 
+    try:    ydl_opts = {
+        'quiet': True, 
+        'no_warnings': True, 
+        'format': 'best[ext=mp4]/best',
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android'],
+                'skip': ['webpage']
+            }
+        }
+    }
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             fmts_data = []
