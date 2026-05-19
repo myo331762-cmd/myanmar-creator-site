@@ -1,6 +1,6 @@
 flask
 flask-cors
-yt-dlp>=2025.01.01
+yt-dlp
 edge-tts
-gunicorn
 requests
+deep-translator
