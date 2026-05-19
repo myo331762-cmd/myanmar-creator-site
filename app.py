@@ -21,14 +21,11 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
 
-# Global dictionary ဖြင့် Background Task စနစ်ကို အစားထိုးခြင်း (Redis မလိုတော့ပါ)
+# Global dictionary ဖြင့် Task များကို မှတ်ခြင်း
 BACKGROUND_TASKS = {}
 
-# Webshare Proxy List (ဖုန်းအတွက် မလိုလျှင် ချန်ထားခဲ့နိုင်သည်)
-PROXY_LIST = []
-
 # ==========================================
-# 1. HTML UI Template (Built-in Web Interface)
+# 1. HTML UI Template (သတိပေးချက်စာသား ဖြည့်စွက်ပြီး)
 # ==========================================
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -36,7 +33,7 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Phone Media Suite</title>
+    <title>Phone Media Suite Pro</title>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
@@ -56,11 +53,9 @@ HTML_TEMPLATE = """
         </ul>
 
         <div class="tab-content">
-            <!-- Video Panel -->
             <div class="tab-pane fade show active" id="video-panel">
                 <div class="card p-3">
                     <h5>Social Media Downloader</h5>
-                    <p class="text-muted small">TikTok, YouTube, FB, IG, Twitter/X</p>
                     <div class="input-group mb-3">
                         <input type="text" id="videoUrl" class="form-control" placeholder="Paste link here...">
                         <button class="btn btn-primary" onclick="startTask('/ext', 'videoUrl', renderVideoResults)">Extract</button>
@@ -69,7 +64,6 @@ HTML_TEMPLATE = """
                 </div>
             </div>
 
-            <!-- Subtitle Panel -->
             <div class="tab-pane fade" id="sub-panel">
                 <div class="card p-3">
                     <h5>YouTube Subtitle Extractor</h5>
@@ -81,7 +75,6 @@ HTML_TEMPLATE = """
                 </div>
             </div>
 
-            <!-- TTS Panel -->
             <div class="tab-pane fade" id="tts-panel">
                 <div class="card p-3">
                     <h5>Myanmar Edge TTS</h5>
@@ -129,9 +122,11 @@ HTML_TEMPLATE = """
             if(!res.success) return Swal.fire('Error', res.error, 'error');
             let html = `<h6>${res.title}</h6><table class="table table-sm mt-2"><tbody>`;
             res.fmts.forEach(f => {
-                html += `<tr><td>${f.res}</td><td><a href="${f.url}" target="_blank" class="btn btn-success btn-sm">Download</a></td></tr>`;
+                html += `<tr><td>${f.res}</td><td><a href="${f.url}" target="_blank" download="video.mp4" class="btn btn-success btn-sm">Download</a></td></tr>`;
             });
             html += '</tbody></table>';
+            // 💡 UI တိုးတက်မှုအဖြစ် သတိပေးစာသား ထည့်သွင်းခြင်း
+            html += `<div class="alert alert-warning small mt-2">⚠️ <b>မှတ်ချက်:</b> Download ခလုတ်နှိပ်လို့ မကျဘဲ ဗီဒီယိုပဲ ပွင့်လာပါက ခလုတ်ကို ဖိနှိပ်ပြီး <b>"Copy link address"</b> ကိုယူကာ Advanced Downloader (သို့) IDM တို့ဖြင့် ဒေါင်းလုဒ်ဆွဲပါ။</div>`;
             document.getElementById('videoResult').innerHTML = html;
         }
 
@@ -177,8 +172,16 @@ HTML_TEMPLATE = """
 """
 
 # ==========================================
-# 2. Helpers
+# 2. Helpers (Optimized Batch Translator & Cleanup)
 # ==========================================
+def cleanup_tasks():
+    """💡 Memory Leak မဖြစ်စေရန် Task ဟောင်းများကို Dictionary ထဲမှ ဖျက်ထုတ်ပေးသော စနစ်"""
+    if len(BACKGROUND_TASKS) > 15:
+        # သက်တမ်းရင့် သို့မဟုတ် ပြီးဆုံးသွားသော Task သော့ချက်များကို ရှာဖွေဖျက်ဆီးခြင်း
+        keys_to_del = [k for k, v in BACKGROUND_TASKS.items() if v.get('status') in ['Completed', 'Failed']]
+        for k in keys_to_del[:8]:  # တစ်ခါရှင်းလျှင် အဟောင်း ၈ ခုစီ ဖျက်ထုတ်မည်
+            BACKGROUND_TASKS.pop(k, None)
+
 def convert_srt_to_clean_text(srt_text):
     if not srt_text: return ""
     text = re.sub(r'(\d{2}:)?\d{2}:\d{2}[,\.]\d{3} --> (\d{2}:)?\d{2}:\d{2}[,\.]\d{3}', '', srt_text)
@@ -222,16 +225,34 @@ def get_tiktok_nowatermark(url):
     except Exception as e: return {'success': False, 'error': str(e)}
 
 def translate_srt_to_myanmar(srt_text):
+    """💡 Fix: Rate limit မထိစေရန်နှင့် မြန်ဆန်စေရန် အုပ်စုလိုက် (Batch) ဘာသာပြန်စနစ်သို့ ပြန်လည်ပြင်ဆင်ခြင်း"""
     if not srt_text: return ""
+    original_srt = srt_text
+    translator = GoogleTranslator(source='en', target='my')
+    lines = srt_text.split('\n')
+    texts_to_translate, translate_indices = [], []
+    
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped and '-->' not in stripped and not stripped.isdigit():
+            texts_to_translate.append(stripped)
+            translate_indices.append(idx)
+            
+    if not texts_to_translate: return srt_text
+    
     try:
-        translator = GoogleTranslator(source='en', target='my')
-        lines = srt_text.split('\n')
-        for idx, line in enumerate(lines):
-            stripped = line.strip()
-            if stripped and '-->' not in stripped and not stripped.isdigit():
-                lines[idx] = translator.translate(stripped)
+        translated_texts = []
+        # စာကြောင်း ၃၀ စီ Chunk ခွဲ၍ တစ်ခါတည်း ပို့ပြီး ဘာသာပြန်ခိုင်းခြင်း
+        for i in range(0, len(texts_to_translate), 30):
+            chunk = texts_to_translate[i:i+30]
+            translated_texts.extend(translator.translate_batch(chunk))
+            
+        for idx, trans_txt in zip(translate_indices, translated_texts): 
+            lines[idx] = trans_txt
         return '\n'.join(lines)
-    except: return srt_text
+    except Exception as e: 
+        logger.error(f"Batch Translation Failed: {str(e)}")
+        return original_srt
 
 async def _generate_audio_bytes(text):
     audio_data = b""
@@ -241,17 +262,14 @@ async def _generate_audio_bytes(text):
     return audio_data
 
 # ==========================================
-# 3. Threaded Background Workers (No Celery/Redis)
+# 3. Threaded Background Workers
 # ==========================================
 def bg_video_download(task_id, url):
     if 'tiktok.com' in url or 'douyin.com' in url:
         BACKGROUND_TASKS[task_id] = {'status': 'Completed', 'result': get_tiktok_nowatermark(url)}
         return
 
-    ydl_opts = {
-        'quiet': True, 'no_warnings': True,
-        'format': 'best[ext=mp4]/best', # ဖုန်းထဲတွင် FFmpeg မရှိပါက အဆင်ပြေစေမည့် basic format ရွေးချယ်မှု
-    }
+    ydl_opts = {'quiet': True, 'no_warnings': True, 'format': 'best[ext=mp4]/best'}
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -310,6 +328,7 @@ def home(): return render_template_string(HTML_TEMPLATE)
 def extract_video():
     url = (request.json or {}).get('url', '').strip()
     if not url: return jsonify({'success': False, 'error': 'လင့်ခ်ထည့်ပါ'})
+    cleanup_tasks() # Memory ရှင်းထုတ်ပေးရန် ခေါ်ယူခြင်း
     task_id = str(uuid.uuid4())
     BACKGROUND_TASKS[task_id] = {'status': 'Processing'}
     threading.Thread(target=bg_video_download, args=(task_id, url)).start()
@@ -319,6 +338,7 @@ def extract_video():
 def get_subtitles():
     url = (request.json or {}).get('url', '').strip()
     if not url: return jsonify({'success': False, 'error': 'လင့်ခ်ထည့်ပါ'})
+    cleanup_tasks() # Memory ရှင်းထုတ်ပေးရန် ခေါ်ယူခြင်း
     task_id = str(uuid.uuid4())
     BACKGROUND_TASKS[task_id] = {'status': 'Processing'}
     threading.Thread(target=bg_subtitle_extract, args=(task_id, url)).start()
@@ -339,4 +359,7 @@ def tts():
     except Exception as e: return str(e), 500
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    # Cloud Deployment (Render) အတွက် Port ကို Environment မှ ဖတ်စေခြင်း
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
+
