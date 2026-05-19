@@ -23,9 +23,11 @@ CORS(app, resources={r"/*": {"origins": "*"}})
 
 # Global dictionary ဖြင့် Task များကို မှတ်ခြင်း
 BACKGROUND_TASKS = {}
+# 💡 Fix 1: Thread-Safety အတွက် Lock စနစ်ကို အသုံးပြုခြင်း
+tasks_lock = threading.Lock()
 
 # ==========================================
-# 1. HTML UI Template (သတိပေးချက်စာသား ဖြည့်စွက်ပြီး)
+# 1. HTML UI Template
 # ==========================================
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -125,7 +127,6 @@ HTML_TEMPLATE = """
                 html += `<tr><td>${f.res}</td><td><a href="${f.url}" target="_blank" download="video.mp4" class="btn btn-success btn-sm">Download</a></td></tr>`;
             });
             html += '</tbody></table>';
-            // 💡 UI တိုးတက်မှုအဖြစ် သတိပေးစာသား ထည့်သွင်းခြင်း
             html += `<div class="alert alert-warning small mt-2">⚠️ <b>မှတ်ချက်:</b> Download ခလုတ်နှိပ်လို့ မကျဘဲ ဗီဒီယိုပဲ ပွင့်လာပါက ခလုတ်ကို ဖိနှိပ်ပြီး <b>"Copy link address"</b> ကိုယူကာ Advanced Downloader (သို့) IDM တို့ဖြင့် ဒေါင်းလုဒ်ဆွဲပါ။</div>`;
             document.getElementById('videoResult').innerHTML = html;
         }
@@ -172,15 +173,24 @@ HTML_TEMPLATE = """
 """
 
 # ==========================================
-# 2. Helpers (Optimized Batch Translator & Cleanup)
+# 2. Helpers (Thread-Safe & Robust Cleanup)
 # ==========================================
 def cleanup_tasks():
-    """💡 Memory Leak မဖြစ်စေရန် Task ဟောင်းများကို Dictionary ထဲမှ ဖျက်ထုတ်ပေးသော စနစ်"""
-    if len(BACKGROUND_TASKS) > 15:
-        # သက်တမ်းရင့် သို့မဟုတ် ပြီးဆုံးသွားသော Task သော့ချက်များကို ရှာဖွေဖျက်ဆီးခြင်း
-        keys_to_del = [k for k, v in BACKGROUND_TASKS.items() if v.get('status') in ['Completed', 'Failed']]
-        for k in keys_to_del[:8]:  # တစ်ခါရှင်းလျှင် အဟောင်း ၈ ခုစီ ဖျက်ထုတ်မည်
+    """💡 Fix 1 & 3: Thread-safe ဖြစ်ပြီး အတင်းအကျပ် ဖျက်ထုတ်ပေးမည့် Cleanup စနစ်"""
+    with tasks_lock:
+        # စိတ်ချရအောင် list() ပြောင်းပြီးမှ loop ပတ်ခြင်း (Crash မဖြစ်စေရန်)
+        current_tasks = list(BACKGROUND_TASKS.items())
+        
+        # ၁။ ပြီးဆုံးသွားသော Task အဟောင်းများကို အရင်ဖျက်ထုတ်ခြင်း
+        keys_to_del = [k for k, v in current_tasks if v.get('status') in ['Completed', 'Failed']]
+        for k in keys_to_del[:10]:
             BACKGROUND_TASKS.pop(k, None)
+            
+        # ၂။ အကယ်၍ အားလုံး Processing ဖြစ်ပြီး အရေအတွက် ၂၅ ခုထက် ကျော်လာပါက အဟောင်းဆုံးကို အတင်းဖျက်ပစ်ခြင်း
+        if len(BACKGROUND_TASKS) > 25:
+            oldest_keys = list(BACKGROUND_TASKS.keys())[:10]
+            for k in oldest_keys:
+                BACKGROUND_TASKS.pop(k, None)
 
 def convert_srt_to_clean_text(srt_text):
     if not srt_text: return ""
@@ -225,7 +235,6 @@ def get_tiktok_nowatermark(url):
     except Exception as e: return {'success': False, 'error': str(e)}
 
 def translate_srt_to_myanmar(srt_text):
-    """💡 Fix: Rate limit မထိစေရန်နှင့် မြန်ဆန်စေရန် အုပ်စုလိုက် (Batch) ဘာသာပြန်စနစ်သို့ ပြန်လည်ပြင်ဆင်ခြင်း"""
     if not srt_text: return ""
     original_srt = srt_text
     translator = GoogleTranslator(source='en', target='my')
@@ -242,7 +251,6 @@ def translate_srt_to_myanmar(srt_text):
     
     try:
         translated_texts = []
-        # စာကြောင်း ၃၀ စီ Chunk ခွဲ၍ တစ်ခါတည်း ပို့ပြီး ဘာသာပြန်ခိုင်းခြင်း
         for i in range(0, len(texts_to_translate), 30):
             chunk = texts_to_translate[i:i+30]
             translated_texts.extend(translator.translate_batch(chunk))
@@ -266,7 +274,8 @@ async def _generate_audio_bytes(text):
 # ==========================================
 def bg_video_download(task_id, url):
     if 'tiktok.com' in url or 'douyin.com' in url:
-        BACKGROUND_TASKS[task_id] = {'status': 'Completed', 'result': get_tiktok_nowatermark(url)}
+        with tasks_lock:
+            BACKGROUND_TASKS[task_id] = {'status': 'Completed', 'result': get_tiktok_nowatermark(url)}
         return
 
     ydl_opts = {'quiet': True, 'no_warnings': True, 'format': 'best[ext=mp4]/best'}
@@ -282,12 +291,14 @@ def bg_video_download(task_id, url):
             if not fmts_data and info.get('url'):
                 fmts_data.append({'res': 'Standard Quality', 'url': info.get('url'), 'ext': info.get('ext', 'mp4'), 'size': 'View'})
             
-            BACKGROUND_TASKS[task_id] = {
-                'status': 'Completed',
-                'result': {'success': True, 'title': info.get('title', 'Video'), 'fmts': fmts_data[:5]}
-            }
+            with tasks_lock:
+                BACKGROUND_TASKS[task_id] = {
+                    'status': 'Completed',
+                    'result': {'success': True, 'title': info.get('title', 'Video'), 'fmts': fmts_data[:5]}
+                }
     except Exception as e:
-        BACKGROUND_TASKS[task_id] = {'status': 'Failed', 'error': str(e)}
+        with tasks_lock:
+            BACKGROUND_TASKS[task_id] = {'status': 'Failed', 'error': str(e)}
 
 def bg_subtitle_extract(task_id, url):
     ydl_opts = {'quiet': True, 'skip_download': True, 'writesubtitles': True, 'writeautomaticsub': True}
@@ -299,24 +310,33 @@ def bg_subtitle_extract(task_id, url):
             for lang in ['en', 'en-US', 'en-GB']:
                 if lang in subs: base_sub_url = subs[lang][0].get('url'); break
                 elif lang in auto_subs: base_sub_url = auto_subs[lang][0].get('url'); break
+            
             if not base_sub_url:
-                BACKGROUND_TASKS[task_id] = {'status': 'Failed', 'error': 'အင်္ဂလိပ်စာတန်းထိုး မတွေ့ပါ'}
+                with tasks_lock: BACKGROUND_TASKS[task_id] = {'status': 'Failed', 'error': 'ဤဗီဒီယိုတွင် အင်္ဂလိပ်စာတန်းထိုး မတွေ့ပါ'}
                 return
             
             if is_youtube and "fmt=" not in base_sub_url: base_sub_url += "&fmt=vtt"
+            
             eng_res = requests.get(base_sub_url, timeout=15)
-            eng_srt = vtt_to_srt(eng_res.text) if eng_res.status_code == 200 else ""
+            
+            # 💡 Fix 2: Subtitle စာသား တကယ် ရမရ စစ်ဆေးခြင်း
+            if eng_res.status_code != 200 or not eng_res.text.strip():
+                with tasks_lock: BACKGROUND_TASKS[task_id] = {'status': 'Failed', 'error': 'စာတန်းထိုးဆွဲ၍မရပါ (Network Error သို့မဟုတ် လင့်ခ်သေနေခြင်း)'}
+                return
+
+            eng_srt = vtt_to_srt(eng_res.text)
             eng_txt = convert_srt_to_clean_text(eng_srt)
             
             my_srt = translate_srt_to_myanmar(eng_srt)
             my_txt = convert_srt_to_clean_text(my_srt)
             
-            BACKGROUND_TASKS[task_id] = {
-                'status': 'Completed',
-                'result': {'success': True, 'eng_srt': eng_srt, 'eng_txt': eng_txt, 'my_srt': my_srt, 'my_txt': my_txt}
-            }
+            with tasks_lock:
+                BACKGROUND_TASKS[task_id] = {
+                    'status': 'Completed',
+                    'result': {'success': True, 'eng_srt': eng_srt, 'eng_txt': eng_txt, 'my_srt': my_srt, 'my_txt': my_txt}
+                }
     except Exception as e:
-        BACKGROUND_TASKS[task_id] = {'status': 'Failed', 'error': str(e)}
+        with tasks_lock: BACKGROUND_TASKS[task_id] = {'status': 'Failed', 'error': str(e)}
 
 # ==========================================
 # 4. Flask Routes
@@ -328,9 +348,9 @@ def home(): return render_template_string(HTML_TEMPLATE)
 def extract_video():
     url = (request.json or {}).get('url', '').strip()
     if not url: return jsonify({'success': False, 'error': 'လင့်ခ်ထည့်ပါ'})
-    cleanup_tasks() # Memory ရှင်းထုတ်ပေးရန် ခေါ်ယူခြင်း
+    cleanup_tasks() 
     task_id = str(uuid.uuid4())
-    BACKGROUND_TASKS[task_id] = {'status': 'Processing'}
+    with tasks_lock: BACKGROUND_TASKS[task_id] = {'status': 'Processing'}
     threading.Thread(target=bg_video_download, args=(task_id, url)).start()
     return jsonify({'success': True, 'task_id': task_id})
 
@@ -338,15 +358,16 @@ def extract_video():
 def get_subtitles():
     url = (request.json or {}).get('url', '').strip()
     if not url: return jsonify({'success': False, 'error': 'လင့်ခ်ထည့်ပါ'})
-    cleanup_tasks() # Memory ရှင်းထုတ်ပေးရန် ခေါ်ယူခြင်း
+    cleanup_tasks() 
     task_id = str(uuid.uuid4())
-    BACKGROUND_TASKS[task_id] = {'status': 'Processing'}
+    with tasks_lock: BACKGROUND_TASKS[task_id] = {'status': 'Processing'}
     threading.Thread(target=bg_subtitle_extract, args=(task_id, url)).start()
     return jsonify({'success': True, 'task_id': task_id})
 
 @app.route('/status/<task_id>', methods=['GET'])
 def get_task_status(task_id):
-    task = BACKGROUND_TASKS.get(task_id, {'status': 'Failed', 'error': 'Task Not Found'})
+    with tasks_lock:
+        task = BACKGROUND_TASKS.get(task_id, {'status': 'Failed', 'error': 'Task Not Found'})
     return jsonify(task)
 
 @app.route('/tts', methods=['POST'])
@@ -359,7 +380,5 @@ def tts():
     except Exception as e: return str(e), 500
 
 if __name__ == '__main__':
-    # Cloud Deployment (Render) အတွက် Port ကို Environment မှ ဖတ်စေခြင်း
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
-
